@@ -40,6 +40,29 @@ func main() {
 		return c.Status(200).JSON(transactions)
 	})
 
+	// Post a transaction
+	app.Post("/api/trans", func(c *fiber.Ctx) error {
+		transaction := &Transaction{}
+
+		if err := c.BodyParser(transaction); err != nil {
+			return err
+		}
+
+		if transaction.Amount == 0.0 {
+			return c.Status(400).JSON(fiber.Map{"error": "Enter at least a valid amount"})
+		}
+
+		transaction.ID = len(transactions) + 1
+		transactions = append(transactions, *transaction)
+
+		return c.Status(201).JSON(transaction)
+	})
+
+	// TODO: Delete a transaction
+	//app.Delete("/api/trans/:id", func(c *fiber.Ctx) error {
+	//	id := c.Params("id")
+	//})
+
 	// Listen to server port
 	log.Fatal(app.Listen(":" + PORT))
 }
