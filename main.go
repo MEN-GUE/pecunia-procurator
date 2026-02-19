@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/joho/godotenv"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type Transaction struct {
-	ID          int     `json:"id"`
+	ID          int     `json:"_id, omitempty" bson:"_id",emitempty`
 	Type        string  `json:"type"`
 	Amount      float64 `json:"amount"`
 	Category    string  `json:"category"`
@@ -18,51 +23,94 @@ type Transaction struct {
 	Date        string  `json:"date"`
 }
 
-func main() {
-	// Welcome message to debug test
-	fmt.Println("Hello world! This is Pecunia-Procurator")
+var collection *mongo.Collection
 
-	// Create the web application
-	app := fiber.New()
-	// Load and Read the .env for getting port
+func main() {
+	fmt.Println("Hello, world")
+
+	// Fetch .env file
 	err := godotenv.Load(".env")
 	if err != nil {
-		log.Fatal("Error loading .env")
+		log.Fatal("File .env not found", err)
 	}
 
-	PORT := os.Getenv("PORT")
+	// Read .env file to connecto to mongodb
+	MONGODB_URI := os.Getenv("MONGODB_URI")
+	clientOptions := options.Client().ApplyURI(MONGODB_URI)
+	client, err := mongo.Connect(context.Background(), clientOptions)
 
-	// Save transaction in local memmory
-	transactions := []Transaction{}
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	// Get all transactions
-	app.Get("/api/trans", func(c *fiber.Ctx) error {
-		return c.Status(200).JSON(transactions)
-	})
+	defer client.Disconnect(context.Background())
 
-	// Post a transaction
-	app.Post("/api/trans", func(c *fiber.Ctx) error {
-		transaction := &Transaction{}
+	err = client.Ping(context.Background(), nil)
 
-		if err := c.BodyParser(transaction); err != nil {
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Connected to MongoDB Atlas")
+
+	collection = client.Database("go_db").Collection("transactions")
+
+	// Start application
+	app := fiber.New()
+
+	app.Get("/api/trans", getTransactions)
+	app.Post("/api/trans", postTransaction)
+
+	// Configure port
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "5000"
+	}
+
+	log.Fatal(app.Listen("0.0.0.0:" + port))
+
+}
+
+func getTransactions(c fiber.Ctx) error {
+	var transactions []Transaction
+
+	cursor, err := collection.Find(context.Background(), bson.M{})
+	if err != nil {
+		return err
+	}
+
+	defer cursor.Close(context.Background())
+
+	for cursor.Next(context.Background()) {
+		var transaction Transaction
+		if err := cursor.Decode(&transaction); err != nil {
 			return err
 		}
 
-		if transaction.Amount == 0.0 {
-			return c.Status(400).JSON(fiber.Map{"error": "Enter at least a valid amount"})
-		}
+		transactions = append(transactions, transaction)
+	}
 
-		transaction.ID = len(transactions) + 1
-		transactions = append(transactions, *transaction)
+	return c.JSON(transactions)
+}
 
-		return c.Status(201).JSON(transaction)
-	})
+func postTransaction(c fiber.Ctx) error {
+	transaction := new(Transaction)
 
-	// TODO: Delete a transaction
-	//app.Delete("/api/trans/:id", func(c *fiber.Ctx) error {
-	//	id := c.Params("id")
-	//})
+	if err := c.Bind().Body(transaction); err != nil {
+		return err
+	}
 
-	// Listen to server port
-	log.Fatal(app.Listen(":" + PORT))
+	if transaction.Amount == 0.0 {
+		return c.Status(400).JSON(fiber.Map{"error": "transaction amount must be grater than 0"})
+	}
+
+	insertResult, err := collection.InsertOne(context.Background(), transaction)
+	if err != nil {
+		return err
+	}
+
+	transaction.ID = insertResult.InsertedID.(primitive.ObjectID)
+
+	return c.Status(200).JSON(transaction)
+
 }
